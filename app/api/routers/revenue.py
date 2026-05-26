@@ -1,234 +1,193 @@
-"""Revenue Analytics Router"""
+"""Revenue analytics and dashboard API."""
+
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_
+from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models import Order, Product, Customer
+from app.models import Order, Customer, Product, OrderStatus
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/revenue", tags=["revenue"])
 
 
-@router.get("/summary")
-async def get_revenue_summary(
-    days: int = Query(90),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get overall revenue summary for the last N days
-    Returns: total revenue, orders, customers, AOV
-    """
+class RevenueSummary(BaseModel):
+    """Revenue summary response schema."""
+    total_revenue: float
+    total_orders: int
+    total_customers: int
+    average_order_value: float
+    period: str = "all_time"
+
+
+class DailyRevenue(BaseModel):
+    """Daily revenue data."""
+    date: str
+    revenue: float
+    orders: int
+    customers: int
+
+
+class ProductRevenue(BaseModel):
+    """Product-specific revenue."""
+    product_id: int
+    product_name: str
+    revenue: float
+    orders: int
+    average_price: float
+
+
+@router.get("/summary", response_model=RevenueSummary)
+async def get_revenue_summary(days: int = None, db: AsyncSession = Depends(get_db)):
+    """Get revenue summary."""
     try:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
-        
-        # Total revenue
-        stmt = select(func.sum(Order.amount)).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
-        )
-        total_revenue = (await db.execute(stmt)).scalar() or 0
-        
-        # Total orders
-        stmt = select(func.count(Order.id)).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
-        )
-        total_orders = (await db.execute(stmt)).scalar() or 0
-        
-        # Unique customers
-        stmt = select(func.count(func.distinct(Order.customer_id))).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
-        )
-        total_customers = (await db.execute(stmt)).scalar() or 0
-        
-        aov = round(total_revenue / total_orders, 2) if total_orders > 0 else 0
-        
+        query = select(
+            func.sum(Order.amount),
+            func.count(Order.id),
+            func.count(func.distinct(Order.customer_id)),
+        ).filter(Order.status == OrderStatus.COMPLETED)
+
+        if days:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            query = query.filter(Order.created_at >= cutoff)
+
+        result = await db.execute(query)
+        total_revenue, total_orders, total_customers = result.one()
+
+        total_revenue = float(total_revenue or 0)
+        total_orders = int(total_orders or 0)
+        total_customers = int(total_customers or 0)
+        aov = total_revenue / total_orders if total_orders > 0 else 0
+
         return {
-            "period_days": days,
-            "total_revenue": round(total_revenue, 2),
+            "total_revenue": total_revenue,
             "total_orders": total_orders,
             "total_customers": total_customers,
-            "average_order_value": aov
+            "average_order_value": aov,
+            "period": f"last_{days}_days" if days else "all_time",
         }
-        
     except Exception as e:
-        logger.error(f"Revenue summary error: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching revenue summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/daily")
-async def get_daily_revenue(
-    days: int = Query(30),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get daily revenue breakdown for the last N days
-    Returns: daily totals with trend analysis
-    """
+@router.get("/daily", response_model=list[DailyRevenue])
+async def get_daily_revenue(days: int = 30, db: AsyncSession = Depends(get_db)):
+    """Get daily revenue breakdown."""
     try:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
-        
-        # Raw SQL aggregation by day
-        stmt = select(
-            func.date(Order.created_at).label("date"),
-            func.sum(Order.amount).label("revenue"),
-            func.count(Order.id).label("orders")
-        ).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
-        ).group_by(
-            func.date(Order.created_at)
-        ).order_by(
-            func.date(Order.created_at).desc()
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        result = await db.execute(
+            select(
+                func.date(Order.created_at),
+                func.sum(Order.amount),
+                func.count(Order.id),
+                func.count(func.distinct(Order.customer_id)),
+            )
+            .filter(and_(Order.status == OrderStatus.COMPLETED, Order.created_at >= cutoff))
+            .group_by(func.date(Order.created_at))
+            .order_by(func.date(Order.created_at).desc())
         )
-        
-        results = (await db.execute(stmt)).all()
-        
-        daily_data = [
+
+        rows = result.all()
+        return [
             {
                 "date": str(row[0]),
-                "revenue": round(float(row[1] or 0), 2),
-                "orders": row[2]
+                "revenue": float(row[1] or 0),
+                "orders": int(row[2] or 0),
+                "customers": int(row[3] or 0),
             }
-            for row in results
+            for row in rows
         ]
-        
-        return {
-            "period_days": days,
-            "daily_data": daily_data
-        }
-        
     except Exception as e:
-        logger.error(f"Daily revenue error: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching daily revenue: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/by-product")
-async def get_revenue_by_product(
-    days: int = Query(90),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get revenue breakdown by product (Main, Bump, Upsell)
-    """
+@router.get("/by-product", response_model=list[ProductRevenue])
+async def get_revenue_by_product(db: AsyncSession = Depends(get_db)):
+    """Get revenue breakdown by product."""
     try:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
-        
-        stmt = select(
-            Product.name,
-            Product.tier,
-            func.sum(Order.amount).label("revenue"),
-            func.count(Order.id).label("orders"),
-            func.count(func.distinct(Order.customer_id)).label("customers")
-        ).join(
-            Order, Order.product_id == Product.id
-        ).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
-        ).group_by(
-            Product.id, Product.name, Product.tier
+        result = await db.execute(
+            select(
+                Product.id,
+                Product.name,
+                func.sum(Order.amount),
+                func.count(Order.id),
+                func.avg(Order.amount),
+            )
+            .join(Order, Order.product_id == Product.id)
+            .filter(Order.status == OrderStatus.COMPLETED)
+            .group_by(Product.id, Product.name)
         )
-        
-        results = (await db.execute(stmt)).all()
-        
-        product_data = [
+
+        rows = result.all()
+        return [
             {
-                "product_name": row[0],
-                "tier": row[1],
-                "revenue": round(float(row[2] or 0), 2),
-                "orders": row[3],
-                "customers": row[4]
+                "product_id": row[0],
+                "product_name": row[1],
+                "revenue": float(row[2] or 0),
+                "orders": int(row[3] or 0),
+                "average_price": float(row[4] or 0),
             }
-            for row in results
+            for row in rows
         ]
-        
-        return {
-            "period_days": days,
-            "by_product": product_data
-        }
-        
     except Exception as e:
-        logger.error(f"Revenue by product error: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching product revenue: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/cohort")
-async def get_cohort_analysis(
-    groupby: str = Query("week"),  # week or month
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get cohort analysis grouped by week or month
-    """
+async def get_cohort_analysis(db: AsyncSession = Depends(get_db)):
+    """Get weekly cohort analysis."""
     try:
-        if groupby == "week":
-            date_func = func.date_trunc('week', Order.created_at)
-        else:
-            date_func = func.date_trunc('month', Order.created_at)
-        
-        stmt = select(
-            date_func.label("period"),
-            func.count(func.distinct(Order.customer_id)).label("new_customers"),
-            func.count(Order.id).label("orders"),
-            func.sum(Order.amount).label("revenue")
-        ).where(
-            Order.status == "completed"
-        ).group_by(
-            date_func
-        ).order_by(
-            date_func.desc()
-        ).limit(12)
-        
-        results = (await db.execute(stmt)).all()
-        
-        cohort_data = [
+        result = await db.execute(
+            select(
+                func.date_trunc("week", Order.created_at),
+                func.count(func.distinct(Order.customer_id)),
+                func.sum(Order.amount),
+            )
+            .filter(Order.status == OrderStatus.COMPLETED)
+            .group_by(func.date_trunc("week", Order.created_at))
+            .order_by(func.date_trunc("week", Order.created_at).desc())
+        )
+
+        rows = result.all()
+        return [
             {
-                "period": str(row[0]) if row[0] else "Unknown",
-                "new_customers": row[1],
-                "orders": row[2],
-                "revenue": round(float(row[3] or 0), 2)
+                "week": str(row[0]),
+                "customers": int(row[1] or 0),
+                "revenue": float(row[2] or 0),
             }
-            for row in results
+            for row in rows
         ]
-        
-        return {
-            "groupby": groupby,
-            "cohorts": cohort_data
-        }
-        
     except Exception as e:
-        logger.error(f"Cohort analysis error: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching cohort analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/forecast")
-async def get_revenue_forecast(
-    days_ahead: int = Query(30),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Simple revenue forecast based on last 30 days average
-    """
+async def get_revenue_forecast(days_ahead: int = 7, db: AsyncSession = Depends(get_db)):
+    """Get simple revenue forecast based on 30-day average."""
     try:
-        # Get average daily revenue from last 30 days
-        cutoff_date = datetime.utcnow() - timedelta(days=30)
-        
-        stmt = select(
-            func.sum(Order.amount) / func.count(func.distinct(func.date(Order.created_at)))
-        ).where(
-            (Order.status == "completed") & (Order.created_at >= cutoff_date)
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        result = await db.execute(
+            select(func.avg(Order.amount))
+            .filter(and_(Order.status == OrderStatus.COMPLETED, Order.created_at >= cutoff))
         )
-        
-        avg_daily_revenue = (await db.execute(stmt)).scalar() or 0
-        
-        # Forecast
-        forecasted_revenue = avg_daily_revenue * days_ahead
-        
+        avg_order_value = float(result.scalar() or 0)
+
+        # Simple forecast: assume 1 order per day average
+        projected_revenue = avg_order_value * days_ahead
+
         return {
             "forecast_days": days_ahead,
-            "avg_daily_revenue": round(float(avg_daily_revenue), 2),
-            "forecasted_revenue": round(float(forecasted_revenue), 2)
+            "average_order_value": avg_order_value,
+            "projected_revenue": projected_revenue,
+            "basis": "30-day average",
         }
-        
     except Exception as e:
-        logger.error(f"Revenue forecast error: {str(e)}", exc_info=True)
+        logger.error(f"Error generating forecast: {e}")
         raise HTTPException(status_code=500, detail=str(e))
