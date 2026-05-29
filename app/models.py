@@ -79,7 +79,7 @@ class Order(Base):
     currency = Column(String(3), default="USD")
     status = Column(Enum(OrderStatus), default=OrderStatus.COMPLETED, index=True)
     license_key = Column(String(255))
-    metadata = Column(Text)
+    sale_metadata = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
