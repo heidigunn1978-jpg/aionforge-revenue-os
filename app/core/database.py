@@ -38,3 +38,17 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise e
         finally:
             await session.close()
+
+
+async def init_db():
+    """Initialize database on startup."""
+    logger.info("Initializing database connection")
+    # Connection pool is created on first use
+    # This is a placeholder for any startup logic needed
+
+
+async def close_db():
+    """Close database connection on shutdown."""
+    logger.info("Closing database connection")
+    await engine.dispose()
+
