@@ -14,9 +14,14 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Convert DATABASE_URL to use asyncpg driver if needed
+database_url = settings.DATABASE_URL
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 # Create async engine
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    database_url,
     poolclass=NullPool
 )
 
@@ -38,3 +43,4 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise e
         finally:
             await session.close()
+
