@@ -15,7 +15,10 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Create async engine
-engine = create_async_engine(DATABASE_URL)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    poolclass=NullPool
+)
 
 # Session factory
 async_session = async_sessionmaker(
