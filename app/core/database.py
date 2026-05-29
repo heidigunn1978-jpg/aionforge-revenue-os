@@ -38,3 +38,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise e
         finally:
             await session.close()
+
+async def init_db():
+    pass
+
+async def close_db():
+    await engine.dispose()
