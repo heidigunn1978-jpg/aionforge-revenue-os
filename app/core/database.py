@@ -15,8 +15,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Create async engine
+# Force the asyncpg driver and use the environment variable directly
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
     poolclass=NullPool
 )
 
