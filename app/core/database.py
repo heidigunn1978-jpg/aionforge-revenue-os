@@ -1,5 +1,6 @@
 """Database configuration and session management."""
 
+import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -14,10 +15,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Convert DATABASE_URL to use asyncpg driver for async SQLAlchemy support
+db_url = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1)
+
 # Create async engine
-# Force the asyncpg driver and use the environment variable directly
 engine = create_async_engine(
-    settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    db_url,
     poolclass=NullPool
 )
 
@@ -41,7 +44,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 async def init_db():
-    pass
+    """Initialize database on startup."""
+    logger.info("Initializing database connection")
 
 async def close_db():
+    """Close database connection on shutdown."""
+    logger.info("Closing database connection")
     await engine.dispose()
+
