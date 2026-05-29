@@ -15,3 +15,6 @@ psycopg2-binary==2.9.9
 notion-client>=2.0.0
 email-validator==2.1.0
 click==8.1.7
+stripe==7.4.0
+bcrypt==4.1.2
+

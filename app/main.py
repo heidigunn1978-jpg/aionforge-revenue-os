@@ -9,6 +9,7 @@ import logging
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.api import routers
+from app.api.routers import agency
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ app.include_router(routers.notion.router)
 app.include_router(routers.products.router)
 app.include_router(routers.customers.router)
 app.include_router(routers.revenue.router)
+app.include_router(agency.router)
 
 
 if __name__ == "__main__":
@@ -83,3 +85,4 @@ if __name__ == "__main__":
         port=settings.API_PORT,
         log_level=settings.LOG_LEVEL.lower(),
     )
+
